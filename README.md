@@ -8,6 +8,9 @@
 
 > Enhanced fork of UnconfuserEx with improved support for modern ConfuserEx2 variants, anti-tamper recovery, compressor removal, control-flow restoration, and resource reconstruction.
 
+https://github.com/user-attachments/assets/de2c7fd9-6736-4f39-83c0-3c25aa9c1f24
+
+
 ---
 
 If u ever played with malware samples, some of them are obfuscated with ConfuserEx, and ive tried some public deobfuscators against the latest but it just wouldnt work, so ive decided to fork a public one which did work against that latest ver and just mod it to my needs.
@@ -21,7 +24,7 @@ That is what this project does. Runs a list of removers in a fixed order, rewrit
 
 The upstream version was already useful, but a few cases kept showing up.
 
-One was the LZMA path. Some samples hand you bytes that look like the constants/resources payload, but the LZMA properties are nonsense. If you pass that straight into the decoder, you get stupid dictionary sizes and eventually exceptions like array dimensions exceeding the supported range. So the local version checks the properties, caps the dictionary size, caps the uncompressed size, and bails before the decoder allocates something ridiculous.
+One was the LZMA path. Some samples hand you bytes that look like the constants/resources payload, but the LZMA properties are nonsense. If you pass that straight into the decoder, you get stupid dictionary sizes and eventually exceptions like array dimensions exceeding the supported range. So this version checks the properties, caps the dictionary size, caps the uncompressed size, and bails before the decoder allocates something ridiculous.
 
 ```text
 LZMA properties => CE FD 62 5F 9F
@@ -39,7 +42,7 @@ xor
 call       string <const getter>(int32)
 ```
 
-Old code sees `xor`, calls `GetLdcI4Value()`, and dies because `xor` is obviously not an integer load. The local version walks back over the small arithmetic sequence, emulates the stack, collapses it back into one `ldc.i4`, and then lets the normal resolver keep going.
+The original fork sees `xor`, calls `GetLdcI4Value()`, and dies because `xor` is obviously not an integer load. This version walks back over the small arithmetic sequence, emulates the stack, collapses it back into one `ldc.i4`, and then lets the normal resolver keep going.
 
 So instead of treating this as a totally different constants protection, it becomes this:
 
@@ -56,7 +59,7 @@ Control flow is where it was meh
 
 The switch remover can handle the normal ConfuserEx switch dispatcher shape. It walks blocks, recovers the next target, deletes dead blocks, and emits a sane method body. But there are samples where only part of the method is understood. If you mutate half a method and then discover it is still obfuscated, the output is worse than useless because now you have broken IL and no clean way to reason about what happened.
 
-So the local version snapshots the method body before touching it:
+So this version snapshots the method body before touching it:
 
 ```text
 instructions
@@ -301,6 +304,11 @@ This project started as a practical reverse-engineering tool rather than a softw
 
 # Disclaimer
 
-This tool is intended for malware analysis, reverse engineering, software recovery, interoperability, and educational research purposes.
+This tool is intended for authorized malware analysis, reverse engineering, software recovery, interoperability, and educational research.
 
+Users are responsible for complying with applicable laws and obtaining any required authorization before analyzing, accessing, or processing software or systems.
+
+Zypherion Technologies does not authorize unlawful use of this tool and disclaims liability for misuse by third parties.
+
+Nothing in this repository or on `www.zypherion.tech` is legal advice.
 
