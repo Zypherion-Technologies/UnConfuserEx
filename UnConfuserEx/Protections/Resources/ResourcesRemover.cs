@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Resources;
+using System.Resources.Extensions;
 using UnConfuserEx.Protections.Resources;
 
 namespace UnConfuserEx.Protections
@@ -337,9 +338,9 @@ namespace UnConfuserEx.Protections
                 {
                     bool changed = false;
                     using var output = new MemoryStream();
-                    using var writer = new ResourceWriter(output);
+                    using var writer = new PreserializedResourceWriter(output);
                     using var stream = new MemoryStream(bytes, writable: false);
-                    using var reader = new ResourceReader(stream);
+                    using var reader = new DeserializingResourceReader(stream);
                     var enumerator = reader.GetEnumerator();
                     while (enumerator.MoveNext())
                     {
@@ -442,6 +443,8 @@ namespace UnConfuserEx.Protections
 
                 if (!TryDescribePortableExecutable(data, out description))
                     description = module.IsILOnly ? "managed PE" : "mixed-mode PE";
+
+                UnConfuserEx.PrepareModuleForWrite(module);
 
                 if (module.IsILOnly)
                 {

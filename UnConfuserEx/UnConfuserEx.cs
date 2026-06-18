@@ -12,12 +12,34 @@ using UnConfuserEx.Protections.AntiDebug;
 using UnConfuserEx.Protections.AntiDump;
 using UnConfuserEx.Protections.AntiTamper;
 using UnConfuserEx.Protections.Compressor;
+using dnlib.DotNet.Emit;
 
 namespace UnConfuserEx
 {
     internal class UnConfuserEx
     {
         static ILog Logger = LogManager.GetLogger("UnConfuserEx");
+
+        internal static void NormalizeMethodBodiesForWrite(ModuleDef module)
+        {
+            foreach (var type in module.GetTypes())
+            {
+                foreach (var method in type.Methods)
+                {
+                    var body = method.Body;
+                    if (body == null)
+                        continue;
+
+                    body.SimplifyBranches();
+                    body.OptimizeBranches();
+                }
+            }
+        }
+
+        internal static void PrepareModuleForWrite(ModuleDef module)
+        {
+            NormalizeMethodBodiesForWrite(module);
+        }
 
         sealed class FailureInfo
         {
@@ -60,6 +82,7 @@ namespace UnConfuserEx
             string? pathArg = null;
             string? outputArg = null;
             RuntimeOptions.RebuildEmbeddedPe = false;
+            RuntimeOptions.EnableSerializedResourceDeserialization = false;
 
             foreach (var arg in args)
             {
@@ -69,10 +92,16 @@ namespace UnConfuserEx
                     continue;
                 }
 
+                if (arg.Equals("--enable-serialized-resources", StringComparison.OrdinalIgnoreCase))
+                {
+                    RuntimeOptions.EnableSerializedResourceDeserialization = true;
+                    continue;
+                }
+
                 if (arg.StartsWith("-", StringComparison.Ordinal))
                 {
                     Logger.Error($"Unknown option: {arg}");
-                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe]");
+                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources]");
                     return 1;
                 }
 
@@ -86,16 +115,19 @@ namespace UnConfuserEx
                 }
                 else
                 {
-                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe]");
+                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources]");
                     return 1;
                 }
             }
 
             if (pathArg is null)
             {
-                Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe]");
+                Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources]");
                 return 1;
             }
+
+            if (RuntimeOptions.EnableSerializedResourceDeserialization)
+                AppContext.SetSwitch("System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization", true);
 
             var path = Path.GetFullPath(pathArg);
             if (!File.Exists(path))
@@ -257,6 +289,8 @@ namespace UnConfuserEx
 
             try
             {
+                PrepareModuleForWrite(module);
+
                 if (module.IsILOnly)
                 {
                     ModuleWriterOptions writerOptions = new ModuleWriterOptions(module);

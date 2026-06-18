@@ -35,6 +35,8 @@ namespace UnConfuserEx.Protections.Constants
                     new ConstantsCFG(method).RemoveFromMethod();
                 }
 
+                SimplifyStatefulHelperCalls(method);
+
                 TypeSig? genericType;
                 int instanceOffset = GetNextInstanceInMethod(getter, method, out genericType);
 
@@ -48,8 +50,8 @@ namespace UnConfuserEx.Protections.Constants
                     }
                     catch (Exception ex)
                     {
-                        Logger.Error($"Failed to compute id at offset {instanceOffset} in {method.FullName} ({ex.Message})");
-                        instanceOffset = GetNextInstanceInMethod(getter, method, out genericType);
+                        Logger.Debug($"Skipping constant at offset {instanceOffset} in {method.FullName} ({ex.Message})");
+                        instanceOffset = GetNextInstanceInMethod(getter, method, instanceOffset + 2, out genericType);
                         continue;
                     }
 
@@ -61,11 +63,11 @@ namespace UnConfuserEx.Protections.Constants
 
                     try
                     {
-                        if (type == stringId)
+                        if (IsStringType(genericType!))
                         {
                             FixStringConstant(method, instanceOffset, id);
                         }
-                        else if (type == numId)
+                        else if (IsSupportedNumberType(genericType!))
                         {
                             FixNumberConstant(method, instanceOffset, id, genericType!);
                         }
@@ -73,15 +75,30 @@ namespace UnConfuserEx.Protections.Constants
                         {
                             FixObjectConstant(method, instanceOffset, id, genericType!);
                         }
+                        else if (type == stringId)
+                        {
+                            FixStringConstant(method, instanceOffset, id);
+                        }
+                        else if (type == numId)
+                        {
+                            FixNumberConstant(method, instanceOffset, id, genericType!);
+                        }
                         else
                         {
                             FixDefaultConstant(method, instanceOffset, genericType!);
                         }
                     }
+                    catch (NotImplementedException ex) when (ex.Message == "Object constant not handled")
+                    {
+                        Logger.Debug($"Skipping unsupported object constant in method ${method.FullName}");
+                        instanceOffset = GetNextInstanceInMethod(getter, method, instanceOffset + 2, out genericType);
+                        continue;
+                    }
                     catch (Exception ex)
                     {
-                        Logger.Error($"Failed to remove constants obfuscation from method ${method.FullName} ({ex.Message})");
-                        return;
+                        Logger.Debug($"Skipping constant in method ${method.FullName} ({ex.Message})");
+                        instanceOffset = GetNextInstanceInMethod(getter, method, instanceOffset + 2, out genericType);
+                        continue;
                     }
 
 

@@ -1,5 +1,6 @@
 ﻿using dnlib.DotNet;
 using dnlib.DotNet.Writer;
+using log4net;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -12,6 +13,8 @@ namespace UnConfuserEx.Protections
 {
     internal class UnicodeRemover : IProtection
     {
+        private static readonly ILog Logger = LogManager.GetLogger("Renamer");
+
         public string Name => "Renamer";
 
         private ModuleDefMD? Module = null;
@@ -79,24 +82,43 @@ namespace UnConfuserEx.Protections
 
         private void RenameMemberRef(IMemberRef memberRef)
         {
-            if (Utils.IsInvalidName(memberRef.Name))
+            if (!Utils.IsInvalidName(memberRef.Name))
+                return;
+
+            TypeDef? declaringType = null;
+            try
             {
-                var declaringType = memberRef.DeclaringType.ResolveTypeDefThrow();
-                var typeInfo = NewTypeInfo[declaringType];
+                declaringType = memberRef.DeclaringType.ResolveTypeDef();
+            }
+            catch (TypeResolveException ex)
+            {
+                Logger.Warn($"Skipping unresolved member ref {memberRef.FullName} ({ex.Message})");
+                return;
+            }
 
-                if (memberRef.IsField)
-                {
-                    memberRef.Name = typeInfo.FieldNames[memberRef.Name];
-                }
-                else if (memberRef.IsMethod)
-                {
-                    memberRef.Name = typeInfo.MethodNames[memberRef.Name];
-                }
+            if (declaringType == null || !NewTypeInfo.TryGetValue(declaringType, out var typeInfo))
+            {
+                Logger.Warn($"Skipping member ref with unresolved declaring type {memberRef.FullName}");
+                return;
+            }
+
+            if (memberRef.IsField)
+            {
+                if (typeInfo.FieldNames.TryGetValue(memberRef.Name, out var fieldName))
+                    memberRef.Name = fieldName;
                 else
-                {
-                    throw new NotImplementedException();
-                }
-
+                    Logger.Warn($"Skipping unknown field ref {memberRef.FullName}");
+            }
+            else if (memberRef.IsMethod)
+            {
+                if (typeInfo.MethodNames.TryGetValue(memberRef.Name, out var methodName))
+                    memberRef.Name = methodName;
+                else
+                    Logger.Warn($"Skipping unknown method ref {memberRef.FullName}");
+            }
+            else
+            {
+                Logger.Warn($"Skipping unsupported member ref {memberRef.FullName}");
             }
         }
     }

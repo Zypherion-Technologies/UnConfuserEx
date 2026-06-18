@@ -19,6 +19,7 @@
     <PackageReference Include="AutomaticGraphLayout.GraphViewerGDI" Version="1.1.12" />
     <PackageReference Include="dnlib" Version="4.4.0" />
     <PackageReference Include="log4net" Version="3.0.3" />
+    <PackageReference Include="System.Resources.Extensions" Version="9.0.0" />
     <PackageReference Include="LZMA-SDK" Version="22.1.1" />
   </ItemGroup>
 
