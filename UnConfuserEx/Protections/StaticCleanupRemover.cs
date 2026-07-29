@@ -84,10 +84,57 @@ namespace UnConfuserEx.Protections
 
         private static void CollectReferences(ModuleDefMD module, HashSet<MethodDef> referencedMethods, HashSet<FieldDef> referencedFields)
         {
+            CollectAttributeReferences(module.CustomAttributes, referencedMethods);
+            CollectAttributeReferences(module.Assembly?.CustomAttributes, referencedMethods);
+
             foreach (var type in module.GetTypes())
             {
+                CollectAttributeReferences(type.CustomAttributes, referencedMethods);
+
+                foreach (var gp in type.GenericParameters)
+                {
+                    CollectAttributeReferences(gp.CustomAttributes, referencedMethods);
+                    foreach (var c in gp.GenericParamConstraints)
+                        CollectAttributeReferences(c.CustomAttributes, referencedMethods);
+                }
+
+                foreach (var ii in type.Interfaces)
+                    CollectAttributeReferences(ii.CustomAttributes, referencedMethods);
+
+                foreach (var property in type.Properties)
+                    CollectAttributeReferences(property.CustomAttributes, referencedMethods);
+
+                foreach (var evt in type.Events)
+                    CollectAttributeReferences(evt.CustomAttributes, referencedMethods);
+
+                foreach (var field in type.Fields)
+                    CollectAttributeReferences(field.CustomAttributes, referencedMethods);
+
                 foreach (var method in type.Methods)
                 {
+                    CollectAttributeReferences(method.CustomAttributes, referencedMethods);
+                    if (method.Parameters is not null)
+                    {
+                        foreach (var p in method.Parameters)
+                        {
+                            if (p.ParamDef is not null)
+                                CollectAttributeReferences(p.ParamDef.CustomAttributes, referencedMethods);
+                        }
+                    }
+                    foreach (var gp in method.GenericParameters)
+                    {
+                        CollectAttributeReferences(gp.CustomAttributes, referencedMethods);
+                        foreach (var c in gp.GenericParamConstraints)
+                            CollectAttributeReferences(c.CustomAttributes, referencedMethods);
+                    }
+
+                    foreach (var ovr in method.Overrides)
+                    {
+                        var resolved = ovr.MethodDeclaration?.ResolveMethodDef();
+                        if (resolved is not null)
+                            referencedMethods.Add(resolved);
+                    }
+
                     if (!method.HasBody)
                         continue;
 
@@ -118,6 +165,22 @@ namespace UnConfuserEx.Protections
                         }
                     }
                 }
+            }
+        }
+
+        private static void CollectAttributeReferences(IList<CustomAttribute>? attributes, HashSet<MethodDef> referencedMethods)
+        {
+            if (attributes is null)
+                return;
+
+            foreach (var ca in attributes)
+            {
+                if (ca is null)
+                    continue;
+
+                var ctor = ca.Constructor?.ResolveMethodDef();
+                if (ctor is not null)
+                    referencedMethods.Add(ctor);
             }
         }
 
@@ -186,6 +249,8 @@ namespace UnConfuserEx.Protections
             EnqueueMethod(module.EntryPoint, reachableMethods, methodWorklist);
             AddReachableType(module.EntryPoint?.DeclaringType, reachable, typeWorklist);
 
+            EnqueueAttributesForAllOwners(module, reachable, typeWorklist, reachableMethods, methodWorklist);
+
             foreach (var type in GetProbableEntryPointTypes(module))
             {
                 AddReachableType(type, reachable, typeWorklist);
@@ -253,6 +318,117 @@ namespace UnConfuserEx.Protections
             }
 
             return removed;
+        }
+
+        private static void EnqueueAttributesForAllOwners(
+            ModuleDefMD module,
+            HashSet<TypeDef> reachable,
+            Queue<TypeDef> typeWorklist,
+            HashSet<MethodDef> reachableMethods,
+            Queue<MethodDef> methodWorklist)
+        {
+            EnqueueAttributes(module.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+            EnqueueAttributes(module.Assembly?.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+
+            foreach (var type in module.GetTypes())
+            {
+                EnqueueAttributes(type.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+
+                foreach (var gp in type.GenericParameters)
+                {
+                    EnqueueAttributes(gp.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+                    foreach (var c in gp.GenericParamConstraints)
+                        EnqueueAttributes(c.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+                }
+
+                foreach (var ii in type.Interfaces)
+                    EnqueueAttributes(ii.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+
+                foreach (var property in type.Properties)
+                    EnqueueAttributes(property.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+
+                foreach (var evt in type.Events)
+                    EnqueueAttributes(evt.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+
+                foreach (var field in type.Fields)
+                    EnqueueAttributes(field.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+
+                foreach (var method in type.Methods)
+                {
+                    EnqueueAttributes(method.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+                    if (method.Parameters is not null)
+                    {
+                        foreach (var p in method.Parameters)
+                        {
+                            if (p.ParamDef is not null)
+                                EnqueueAttributes(p.ParamDef.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+                        }
+                    }
+                    foreach (var gp in method.GenericParameters)
+                    {
+                        EnqueueAttributes(gp.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+                        foreach (var c in gp.GenericParamConstraints)
+                            EnqueueAttributes(c.CustomAttributes, reachable, typeWorklist, reachableMethods, methodWorklist);
+                    }
+                }
+            }
+        }
+
+        private static void EnqueueAttributes(
+            IList<CustomAttribute>? attributes,
+            HashSet<TypeDef> reachable,
+            Queue<TypeDef> typeWorklist,
+            HashSet<MethodDef> reachableMethods,
+            Queue<MethodDef> methodWorklist)
+        {
+            if (attributes is null)
+                return;
+
+            foreach (var ca in attributes)
+            {
+                if (ca is null)
+                    continue;
+
+                AddReachableType(ca.AttributeType?.ResolveTypeDef(), reachable, typeWorklist);
+                var ctor = ca.Constructor?.ResolveMethodDef();
+                if (ctor is not null)
+                {
+                    AddReachableType(ctor.DeclaringType, reachable, typeWorklist);
+                    EnqueueMethod(ctor, reachableMethods, methodWorklist);
+                }
+
+                foreach (var arg in ca.ConstructorArguments)
+                    EnqueueCAArgumentTypes(arg, reachable, typeWorklist);
+                foreach (var named in ca.NamedArguments)
+                {
+                    EnqueueTypeSignature(named.Type, reachable, typeWorklist);
+                    EnqueueCAArgumentTypes(named.Argument, reachable, typeWorklist);
+                }
+            }
+        }
+
+        private static void EnqueueCAArgumentTypes(CAArgument arg, HashSet<TypeDef> reachable, Queue<TypeDef> worklist)
+        {
+            EnqueueTypeSignature(arg.Type, reachable, worklist);
+            switch (arg.Value)
+            {
+                case TypeSig ts:
+                    EnqueueTypeSignature(ts, reachable, worklist);
+                    break;
+                case ITypeDefOrRef tdr:
+                    AddReachableType(tdr.ResolveTypeDef(), reachable, worklist);
+                    break;
+                case CAArgument inner:
+                    EnqueueCAArgumentTypes(inner, reachable, worklist);
+                    break;
+                case System.Collections.IList list:
+                    foreach (var item in list)
+                    {
+                        if (item is CAArgument innerArg)
+                            EnqueueCAArgumentTypes(innerArg, reachable, worklist);
+                    }
+                    break;
+            }
         }
 
         private static void AddModuleReferenceFence(ModuleDefMD module, HashSet<TypeDef> reachable)
