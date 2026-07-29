@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using dnlib.DotNet;
 using dnlib.DotNet.Writer;
 using System.Collections.Generic;
@@ -75,8 +76,38 @@ namespace UnConfuserEx
             Logger.Warn("----- FAILURE SUMMARY END -----");
         }
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+        private const int STD_OUTPUT_HANDLE = -11;
+        private const int STD_ERROR_HANDLE = -12;
+        private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+
+        private static void EnableVirtualTerminal()
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return;
+
+            foreach (var handleId in new[] { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE })
+            {
+                var handle = GetStdHandle(handleId);
+                if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+                    continue;
+                if (!GetConsoleMode(handle, out uint mode))
+                    continue;
+                SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+
         static int Main(string[] args)
         {
+            EnableVirtualTerminal();
             XmlConfigurator.Configure(typeof(UnConfuserEx).Assembly.GetManifestResourceStream("UnConfuserEx.log4net.xml"));
 
             string? pathArg = null;
