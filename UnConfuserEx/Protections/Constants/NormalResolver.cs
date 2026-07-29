@@ -13,8 +13,9 @@ namespace UnConfuserEx.Protections.Constants
     {
         private static ILog Logger = LogManager.GetLogger("Constants");
 
-        public NormalResolver(byte[] data)
+        public NormalResolver(ModuleDefMD module, byte[] data)
         {
+            Module = module;
             this.data = data;
         }
 

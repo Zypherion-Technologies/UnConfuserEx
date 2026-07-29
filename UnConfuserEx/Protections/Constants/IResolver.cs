@@ -1,5 +1,6 @@
 ﻿using dnlib.DotNet;
 using dnlib.DotNet.Emit;
+using log4net;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,7 +13,16 @@ namespace UnConfuserEx.Protections.Constants
 {
     internal abstract class IResolver
     {
+        private static readonly ILog ResolverLogger = LogManager.GetLogger("Constants");
+
         protected byte[]? data;
+
+        /// <summary>
+        /// Owning module. Needed to materialise array constants, which are
+        /// rebuilt as a real <c>RuntimeHelpers.InitializeArray</c> blob rather
+        /// than left as a call into the (removed) decryption getter.
+        /// </summary>
+        protected ModuleDefMD? Module;
 
         public abstract void Resolve(MethodDef method, IList<MethodDef> instances);
 
@@ -530,16 +540,222 @@ namespace UnConfuserEx.Protections.Constants
             method.Body.Instructions[instrOffset + 1].Operand = null;
         }
 
+        /// <summary>
+        /// Rebuilds an array constant.
+        /// </summary>
+        /// <remarks>
+        /// The blob header for an array constant is two little-endian dwords at
+        /// <paramref name="id"/>, followed by the raw payload at id + 8:
+        ///
+        ///   [id+0] dword  totalSize — 4 + (count * sizeof(element))
+        ///   [id+4] dword  count     — number of ELEMENTS, not bytes
+        ///   [id+8] byte[] payload   — count * sizeof(element) raw little-endian
+        ///
+        /// Note there is no type token here; the element type comes from the
+        /// generic argument of <c>Get&lt;T&gt;</c>, which is the array type
+        /// itself and therefore already known at the call site.
+        ///
+        /// The two header dwords are redundant with each other, and that
+        /// redundancy is the safety net: totalSize must equal
+        /// 4 + count * sizeof(element). That single equation simultaneously
+        /// confirms the offset is really an array header, that count is the
+        /// element count rather than a byte length, and that the element size
+        /// we derived from the signature agrees with how the data was written.
+        /// If it does not hold we throw the usual "not handled" and the caller
+        /// keeps its existing skip-and-log behaviour — a skipped constant is
+        /// recoverable, a silently mis-decoded array is not.
+        /// </remarks>
         protected void FixObjectConstant(MethodDef method, int instrOffset, int id, TypeSig type)
         {
             if (!CanReplaceConstant(method, instrOffset) || !TryValidateDataRange(id, 8, out _))
                 throw new IndexOutOfRangeException("Object constant header is outside the decrypted blob");
 
-            int num0 = data![id] | (data[id + 1] << 8) | (data[id + 2] << 16) | (data[id + 3] << 24);
-            uint num1 = (uint)(data![id + 4] | (data[id + 5] << 8) | (data[id + 6] << 16) | (data[id + 7] << 24));
-            num1 = (num1 << 4) | (num1 >> 0x1C);
+            int totalSize = data![id] | (data[id + 1] << 8) | (data[id + 2] << 16) | (data[id + 3] << 24);
+            int count = data[id + 4] | (data[id + 5] << 8) | (data[id + 6] << 16) | (data[id + 7] << 24);
 
+            if (Module == null)
+                FailObjectConstant("resolver has no module reference");
+
+            if (type is not SZArraySig)
+                FailObjectConstant($"constant type {type?.FullName ?? "<null>"} is not a single-dimension array");
+
+            var elementSig = ((SZArraySig)type).Next;
+            int elementSize = GetPrimitiveElementSize(elementSig);
+            if (elementSize == 0)
+                FailObjectConstant($"unsupported array element type {elementSig?.FullName ?? "<null>"}");
+
+            if (count <= 0 || count > (int.MaxValue - 4) / elementSize)
+                FailObjectConstant($"implausible element count {count}");
+
+            int byteCount = count * elementSize;
+            if (totalSize != byteCount + 4)
+                FailObjectConstant($"header self-check failed for {elementSig!.FullName}[]: " +
+                    $"declared size {totalSize} != 4 + {count} * {elementSize}");
+
+            if (!TryValidateDataRange(id + 8, byteCount, out _))
+                FailObjectConstant($"payload of {byteCount} byte(s) runs past the end of the decrypted blob");
+
+            var payload = new byte[byteCount];
+            Buffer.BlockCopy(data, id + 8, payload, 0, byteCount);
+
+            EmitArrayInitializer(method, instrOffset, count, elementSig!, payload);
+            ResolverLogger.Debug($"Rebuilt {elementSig!.FullName}[{count}] array constant ({byteCount} byte(s)) in {method.FullName}");
+        }
+
+        /// <summary>
+        /// Throws the sentinel the resolvers catch, after recording why. Declared
+        /// as returning <see cref="Exception"/> so call sites read as terminal.
+        /// </summary>
+        private static void FailObjectConstant(string reason)
+        {
+            ResolverLogger.Debug($"Cannot rebuild array constant: {reason}");
             throw new NotImplementedException("Object constant not handled");
+        }
+
+        private static int GetPrimitiveElementSize(TypeSig? sig)
+        {
+            if (sig == null)
+                return 0;
+
+            return sig.ElementType switch
+            {
+                ElementType.Boolean or ElementType.I1 or ElementType.U1 => 1,
+                ElementType.Char or ElementType.I2 or ElementType.U2 => 2,
+                ElementType.I4 or ElementType.U4 or ElementType.R4 => 4,
+                ElementType.I8 or ElementType.U8 or ElementType.R8 => 8,
+                _ => 0,
+            };
+        }
+
+        /// <summary>
+        /// Replaces "ldc.i4 &lt;id&gt;; call Get&lt;T[]&gt;" with the canonical
+        /// newarr + InitializeArray sequence the C# compiler emits.
+        /// </summary>
+        private void EmitArrayInitializer(MethodDef method, int instrOffset, int count, TypeSig elementSig, byte[] payload)
+        {
+            var dataField = CreateArrayDataField(payload);
+            var instrs = method.Body.Instructions;
+
+            // Reuse the two existing instruction objects so any branch already
+            // targeting them stays valid, then insert the remainder after.
+            instrs[instrOffset].OpCode = OpCodes.Ldc_I4;
+            instrs[instrOffset].Operand = count;
+            instrs[instrOffset + 1].OpCode = OpCodes.Newarr;
+            instrs[instrOffset + 1].Operand = elementSig.ToTypeDefOrRef();
+
+            instrs.Insert(instrOffset + 2, OpCodes.Dup.ToInstruction());
+            instrs.Insert(instrOffset + 3, OpCodes.Ldtoken.ToInstruction(dataField));
+            instrs.Insert(instrOffset + 4, OpCodes.Call.ToInstruction(GetInitializeArrayRef()));
+        }
+
+        private MemberRef? initializeArrayRef;
+
+        private const string ArrayDataHolderName = "<UnConfuserExArrayData>";
+
+        /// <summary>
+        /// Emitted-array bookkeeping. This is per MODULE, not per resolver: a
+        /// resolver is constructed for each constant getter, so per-instance
+        /// counters would restart at 0 for every getter and emit several
+        /// __arrayData0 fields — and, worse, colliding nested type names like
+        /// two __StaticArrayInitTypeSize=12_0 under the same holder, which is
+        /// invalid metadata. Module scope also lets identical payloads dedupe
+        /// across getters rather than only within one.
+        /// </summary>
+        private sealed class ArrayDataState
+        {
+            public TypeDef? Holder;
+            public int Count;
+            public readonly Dictionary<string, FieldDef> Fields = new(StringComparer.Ordinal);
+        }
+
+        private static readonly Dictionary<ModuleDef, ArrayDataState> ArrayDataStates = new();
+
+        private ArrayDataState GetArrayDataState()
+        {
+            if (!ArrayDataStates.TryGetValue(Module!, out var state))
+            {
+                state = new ArrayDataState();
+                ArrayDataStates[Module!] = state;
+            }
+            return state;
+        }
+
+        /// <summary>
+        /// Container for the rebuilt array blobs. Mirrors the compiler's
+        /// &lt;PrivateImplementationDetails&gt; but under our own name so it
+        /// can't collide with one the original assembly already has.
+        /// </summary>
+        private TypeDef GetArrayDataHolder()
+        {
+            var state = GetArrayDataState();
+            if (state.Holder != null)
+                return state.Holder;
+
+            state.Holder = new TypeDefUser(string.Empty, ArrayDataHolderName, Module!.CorLibTypes.Object.TypeDefOrRef)
+            {
+                Attributes = TypeAttributes.NotPublic | TypeAttributes.AutoLayout
+                           | TypeAttributes.Class | TypeAttributes.AnsiClass | TypeAttributes.Sealed,
+            };
+            Module.Types.Add(state.Holder);
+
+            return state.Holder;
+        }
+
+        private FieldDef CreateArrayDataField(byte[] payload)
+        {
+            // The same array is often loaded from several call sites. Without
+            // this, a 100KB blob would be re-emitted once per site.
+            var state = GetArrayDataState();
+            var key = payload.Length + ":" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload));
+            if (state.Fields.TryGetValue(key, out var cached))
+                return cached;
+
+            var holder = GetArrayDataHolder();
+            int index = state.Count++;
+
+            // Explicit-layout value type sized to the blob, exactly how csc
+            // models static array initialisers.
+            var storageType = new TypeDefUser(
+                string.Empty,
+                $"__StaticArrayInitTypeSize={payload.Length}_{index}",
+                Module!.CorLibTypes.GetTypeRef("System", "ValueType"))
+            {
+                Attributes = TypeAttributes.NestedPrivate | TypeAttributes.ExplicitLayout
+                           | TypeAttributes.AnsiClass | TypeAttributes.Sealed,
+                ClassLayout = new ClassLayoutUser(1, (uint)payload.Length),
+            };
+            holder.NestedTypes.Add(storageType);
+
+            var field = new FieldDefUser(
+                $"__arrayData{index}",
+                new FieldSig(storageType.ToTypeSig()),
+                FieldAttributes.Assembly | FieldAttributes.Static | FieldAttributes.HasFieldRVA)
+            {
+                InitialValue = payload,
+            };
+            holder.Fields.Add(field);
+
+            state.Fields[key] = field;
+            return field;
+        }
+
+        private MemberRef GetInitializeArrayRef()
+        {
+            if (initializeArrayRef != null)
+                return initializeArrayRef;
+
+            var corlib = Module!.CorLibTypes.AssemblyRef;
+            var runtimeHelpers = new TypeRefUser(Module, "System.Runtime.CompilerServices", "RuntimeHelpers", corlib);
+            var arrayRef = new TypeRefUser(Module, "System", "Array", corlib);
+            var fieldHandleRef = new TypeRefUser(Module, "System", "RuntimeFieldHandle", corlib);
+
+            var sig = MethodSig.CreateStatic(
+                Module.CorLibTypes.Void,
+                arrayRef.ToTypeSig(),
+                new ValueTypeSig(fieldHandleRef));
+
+            initializeArrayRef = new MemberRefUser(Module, "InitializeArray", sig, runtimeHelpers);
+            return initializeArrayRef;
         }
 
         protected void FixDefaultConstant(MethodDef method, int instrOffset, TypeSig type)

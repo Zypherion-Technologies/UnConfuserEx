@@ -103,6 +103,27 @@ namespace UnConfuserEx
                     || (name.Any(c => InvalidChars.Contains(c)));
         }
 
+        /// <summary>
+        /// True for the short all-letter identifiers a renamer emits when it is
+        /// configured for ASCII/letters output — "a", "A", "aB" and so on.
+        /// These are perfectly legal identifiers, so <see cref="IsInvalidName"/>
+        /// (correctly) ignores them; this is the opt-in test used when the user
+        /// would rather have unique generated names than case-only collisions.
+        /// </summary>
+        public static bool IsMeaninglessName(string name)
+        {
+            if (string.IsNullOrEmpty(name) || name.Length > 2)
+                return false;
+
+            foreach (var c in name)
+            {
+                if (!char.IsAsciiLetter(c))
+                    return false;
+            }
+
+            return true;
+        }
+
         public static int GetStoreLocalIndex(Instruction instr)
         {
             if (instr.OpCode == OpCodes.Stloc_S || instr.OpCode == OpCodes.Stloc)

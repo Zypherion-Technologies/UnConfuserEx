@@ -11,8 +11,6 @@ namespace UnConfuserEx.Protections.Constants
     {
         private static ILog Logger = LogManager.GetLogger("Constants");
 
-        private ModuleDefMD Module;
-
         public X86Resolver(ModuleDefMD module, byte[] data)
         {
             Module = module;

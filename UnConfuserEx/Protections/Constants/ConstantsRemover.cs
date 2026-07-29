@@ -148,7 +148,7 @@ namespace UnConfuserEx.Protections
                         resolver = new X86Resolver(module, data!);
                         break;
                     case GetterType.Normal:
-                        resolver = new NormalResolver(data!);
+                        resolver = new NormalResolver(module, data!);
                         break;
                     default:
                         throw new NotImplementedException();

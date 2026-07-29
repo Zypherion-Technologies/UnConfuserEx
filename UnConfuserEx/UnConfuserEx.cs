@@ -114,6 +114,7 @@ namespace UnConfuserEx
             string? outputArg = null;
             RuntimeOptions.RebuildEmbeddedPe = false;
             RuntimeOptions.EnableSerializedResourceDeserialization = false;
+            RuntimeOptions.RenameShortNames = false;
 
             foreach (var arg in args)
             {
@@ -129,10 +130,16 @@ namespace UnConfuserEx
                     continue;
                 }
 
+                if (arg.Equals("--rename-short-names", StringComparison.OrdinalIgnoreCase))
+                {
+                    RuntimeOptions.RenameShortNames = true;
+                    continue;
+                }
+
                 if (arg.StartsWith("-", StringComparison.Ordinal))
                 {
                     Logger.Error($"Unknown option: {arg}");
-                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources]");
+                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources] [--rename-short-names]");
                     return 1;
                 }
 
@@ -146,14 +153,14 @@ namespace UnConfuserEx
                 }
                 else
                 {
-                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources]");
+                    Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources] [--rename-short-names]");
                     return 1;
                 }
             }
 
             if (pathArg is null)
             {
-                Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources]");
+                Logger.Error("Usage: unconfuser.exe <module path> <output path> [--rebuild-embedded-pe] [--enable-serialized-resources] [--rename-short-names]");
                 return 1;
             }
 
